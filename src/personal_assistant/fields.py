@@ -1,10 +1,4 @@
-"""Validated value objects (fields) used by contacts and notes.
-
-A field is immutable: it normalizes and validates the raw text once,
-in the constructor, and raises ValidationError when the text breaks
-the rules. Changing a value means creating a new field object, so an
-edit always runs exactly the same checks as a new entry.
-"""
+"""Fields of contacts and notes; each one checks its value when created."""
 
 import re
 from abc import ABC, abstractmethod
@@ -15,95 +9,54 @@ from personal_assistant.errors import ValidationError
 
 T = TypeVar("T")
 
-# NUL, ESC and similar characters would corrupt the terminal output.
-_CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
-
-# The longest piece of user input repeated in an error message.
-_SHOWN_LENGTH = 40
-
-
-def shorten(text: object) -> str:
-    """Return ``text`` cut to 40 characters for messages."""
-    value = str(text)
-    if len(value) <= _SHOWN_LENGTH:
-        return value
-    cut = _SHOWN_LENGTH - 1
-    return value[:cut] + "…"
-
 
 class Field(ABC, Generic[T]):
-    """Base class of every field (the template method pattern).
-
-    Subclasses implement :meth:`parse`, which turns raw user text into
-    the stored value; the base class checks that the input is text and
-    provides comparison, hashing and printing for all of them.
-    """
+    """Base class of all fields: subclasses check the value in parse()."""
 
     def __init__(self, raw: str) -> None:
-        # Data read from a damaged file may hold None, numbers or lists.
-        if not isinstance(raw, str):
-            raise ValidationError(
-                f"{type(self).__name__} must be text, "
-                f"not {type(raw).__name__}."
-            )
-        self._value: T = self.parse(raw)
-
-    @property
-    def value(self) -> T:
-        """The normalized, validated value."""
-        return self._value
+        self.value: T = self.parse(raw)
 
     @abstractmethod
     def parse(self, raw: str) -> T:
-        """Normalize and validate ``raw`` or raise ValidationError."""
+        """Return the cleaned-up value or raise ValidationError."""
 
     def __str__(self) -> str:
-        return str(self._value)
+        return str(self.value)
 
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Field):
-            return NotImplemented
-        return type(self) is type(other) and self._value == other._value
+        return isinstance(other, type(self)) and self.value == other.value
 
     def __hash__(self) -> int:
-        return hash((type(self).__name__, self._value))
+        return hash((type(self), self.value))
 
 
 class TextField(Field[str]):
-    """Free text: trimmed, inner whitespace collapsed, length-limited.
-
-    Subclasses set ``LABEL`` (used in messages) and ``MAX_LENGTH``.
-    """
+    """Free text without extra spaces; must not be empty or too long."""
 
     LABEL: str
     MAX_LENGTH: int
 
     def parse(self, raw: str) -> str:
-        """Collapse whitespace; check emptiness, length and characters."""
+        """Collapse spaces; check that the text is not empty or too long."""
         text = " ".join(raw.split())
         if not text:
             raise ValidationError(f"{self.LABEL} cannot be empty.")
         if len(text) > self.MAX_LENGTH:
             raise ValidationError(
-                f"{self.LABEL} is too long: {len(text)} characters "
-                f"(maximum {self.MAX_LENGTH})."
-            )
-        if _CONTROL_CHARS.search(text):
-            raise ValidationError(
-                f"{self.LABEL} cannot contain control characters."
+                f"{self.LABEL} is too long (maximum {self.MAX_LENGTH})."
             )
         return text
 
 
 class Name(TextField):
-    """Contact name; any characters that people really use are allowed."""
+    """Contact name."""
 
     LABEL = "Name"
     MAX_LENGTH = 50
 
 
 class Address(TextField):
-    """Postal address as free text."""
+    """Postal address."""
 
     LABEL = "Address"
     MAX_LENGTH = 120
@@ -117,81 +70,51 @@ class NoteText(TextField):
 
 
 class Phone(Field[str]):
-    """Ukrainian phone number, always stored as ``+380XXXXXXXXX``."""
+    """Ukrainian phone number, stored as +380XXXXXXXXX."""
 
-    _SEPARATORS = re.compile(r"[\s\-.()]")
     _PATTERN = re.compile(r"(?:\+?380|0)([0-9]{9})")
 
     def parse(self, raw: str) -> str:
-        """Drop separators and convert any accepted form to +380."""
-        match = self._PATTERN.fullmatch(self._SEPARATORS.sub("", raw))
+        """Accept +380..., 380... or 0..., with spaces, dashes or brackets."""
+        match = self._PATTERN.fullmatch(re.sub(r"[\s()-]", "", raw))
         if match is None:
             raise ValidationError(
-                f"Invalid phone number '{shorten(raw)}'. Use +380XXXXXXXXX, "
-                "380XXXXXXXXX or 0XXXXXXXXX; spaces, dashes, dots and "
-                "brackets are allowed."
+                f"Invalid phone number '{raw}'. "
+                "Use +380XXXXXXXXX, 380XXXXXXXXX or 0XXXXXXXXX."
             )
         return "+380" + match.group(1)
 
-    @property
-    def local(self) -> str:
-        """The number in the domestic form, e.g. ``0671234567``."""
-        return "0" + self.value[4:]
-
 
 class Email(Field[str]):
-    """E-mail address; the domain part is stored in lower case."""
+    """E-mail address such as name@example.com."""
 
-    MAX_LENGTH = 254
-    _PATTERN = re.compile(
-        # The name: allowed characters in dot-separated parts.
-        r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
-        r"(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
-        r"@"
-        # The domain: labels of up to 63 characters, then a top level.
-        r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
-        r"[A-Za-z]{2,63}"
-    )
+    _PATTERN = re.compile(r"[\w.+-]+@([\w-]+\.)+[A-Za-z]{2,}")
 
     def parse(self, raw: str) -> str:
-        """Check the ``name@domain.tld`` shape and the total length."""
+        """Check the name@domain.tld shape."""
         email = raw.strip()
-        if len(email) > self.MAX_LENGTH or not self._PATTERN.fullmatch(email):
+        if not self._PATTERN.fullmatch(email):
             raise ValidationError(
-                f"Invalid email '{shorten(email)}'. "
-                "Expected something like name@example.com."
+                f"Invalid email '{email}'. Use the form name@example.com."
             )
-        local, domain = email.rsplit("@", 1)
-        return f"{local}@{domain.lower()}"
+        return email
 
 
 class Birthday(Field[date]):
-    """Date of birth written as ``DD.MM.YYYY``; never in the future."""
+    """Birthday written as DD.MM.YYYY, from 1900 up to today."""
 
     FORMAT = "%d.%m.%Y"
-    MIN_YEAR = 1900
-    _PATTERN = re.compile(r"[0-9]{2}\.[0-9]{2}\.[0-9]{4}")
 
     def parse(self, raw: str) -> date:
-        """Parse a real calendar date between 1900 and today."""
-        text = raw.strip()
-        if not self._PATTERN.fullmatch(text):
-            raise ValidationError(
-                f"Invalid birthday '{shorten(text)}'. "
-                "Use DD.MM.YYYY, e.g. 24.08.1991."
-            )
+        """Parse the date and check that it is between 1900 and today."""
         try:
-            born = datetime.strptime(text, self.FORMAT).date()
+            born = datetime.strptime(raw.strip(), self.FORMAT).date()
         except ValueError:
             raise ValidationError(
-                f"Invalid birthday '{text}': there is no such date."
+                f"Invalid birthday '{raw}'. Use a real date as DD.MM.YYYY."
             ) from None
-        if born.year < self.MIN_YEAR:
-            raise ValidationError(
-                f"Birthday year must be {self.MIN_YEAR} or later."
-            )
-        if born > date.today():
-            raise ValidationError("Birthday cannot be in the future.")
+        if not date(1900, 1, 1) <= born <= date.today():
+            raise ValidationError("Birthday must be between 1900 and today.")
         return born
 
     def __str__(self) -> str:
@@ -199,26 +122,15 @@ class Birthday(Field[date]):
 
 
 class Tag(Field[str]):
-    """Note keyword: one word, stored without '#' and in lower case."""
+    """Note tag: one word, stored in lower case without '#'."""
 
-    MAX_LENGTH = 30
-    # A letter or digit first, then letters, digits, '-' or '_'.
-    _PATTERN = re.compile(r"[^\W_][\w-]*")
+    _PATTERN = re.compile(r"[\w-]+")
 
     def parse(self, raw: str) -> str:
-        """Drop a leading '#', lower the case and check the characters."""
-        tag = raw.strip().lstrip("#").casefold()
-        if not tag:
-            raise ValidationError("Tag cannot be empty.")
-        if len(tag) > self.MAX_LENGTH:
-            raise ValidationError(
-                f"Tag is too long (maximum {self.MAX_LENGTH} characters)."
-            )
+        """Drop a leading '#', lower the case and check it is one word."""
+        tag = raw.strip().lstrip("#").lower()
         if not self._PATTERN.fullmatch(tag):
-            raise ValidationError(
-                f"Invalid tag '{shorten(raw)}'. Use one word of letters, "
-                "digits, '-' or '_', e.g. #work."
-            )
+            raise ValidationError(f"Invalid tag '{raw}'. Use one word: #work.")
         return tag
 
     def __str__(self) -> str:
