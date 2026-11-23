@@ -1,0 +1,62 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "personal-assistant"
+dynamic = ["version"]
+description = "Command-line personal assistant: contacts with birthdays and notes with tags."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+keywords = ["cli", "address-book", "contacts", "notes", "birthdays"]
+classifiers = [
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Office/Business",
+]
+
+[project.optional-dependencies]
+dev = [
+    "flake8>=7.0",
+    "mypy>=1.10",
+    "pre-commit>=3.5",
+    "pytest>=8.0",
+    "ruff>=0.15",
+]
+
+[project.urls]
+Repository = "https://github.com/nekipa12/goit-pycore-final-project"
+
+[tool.setuptools.dynamic]
+version = { attr = "personal_assistant.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 79
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "N", "UP", "B", "SIM", "D"]
+# Magic methods and __init__ are described by the class docstring.
+ignore = ["D105", "D107"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+files = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
