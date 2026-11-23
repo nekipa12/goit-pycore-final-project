@@ -185,4 +185,17 @@ def test_fields_compare_by_type_and_value():
     assert Name("Kyiv") != Address("Kyiv")
     assert len({Tag("work"), Tag("#WORK")}) == 1
     assert str(Tag("work")) == "#work"
-    assert repr(Phone("0671234567")) == "Phone('+380671234567')"
+
+
+@pytest.mark.parametrize(
+    ("field", "raw"),
+    [
+        (Name, None),
+        (Name, ["Anna", "Kovalenko"]),
+        (Phone, 380671234567),
+        (Tag, 2026),
+    ],
+)
+def test_fields_accept_only_text(field, raw):
+    with pytest.raises(ValidationError, match="must be text"):
+        field(raw)

@@ -6,8 +6,6 @@ the rules. Changing a value means creating a new field object, so an
 edit always runs exactly the same checks as a new entry.
 """
 
-from __future__ import annotations
-
 import re
 from abc import ABC, abstractmethod
 from datetime import date, datetime
@@ -20,13 +18,16 @@ T = TypeVar("T")
 # NUL, ESC and similar characters would corrupt the terminal output.
 _CONTROL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
 
+# The longest piece of user input repeated in an error message.
+_SHOWN_LENGTH = 40
 
-def shorten(text: object, limit: int = 40) -> str:
-    """Return ``text`` cut to ``limit`` characters for messages."""
+
+def shorten(text: object) -> str:
+    """Return ``text`` cut to 40 characters for messages."""
     value = str(text)
-    if len(value) <= limit:
+    if len(value) <= _SHOWN_LENGTH:
         return value
-    cut = limit - 1
+    cut = _SHOWN_LENGTH - 1
     return value[:cut] + "…"
 
 
@@ -34,11 +35,17 @@ class Field(ABC, Generic[T]):
     """Base class of every field (the template method pattern).
 
     Subclasses implement :meth:`parse`, which turns raw user text into
-    the stored value; the base class provides comparison, hashing and
-    printing for all of them.
+    the stored value; the base class checks that the input is text and
+    provides comparison, hashing and printing for all of them.
     """
 
     def __init__(self, raw: str) -> None:
+        # Data read from a damaged file may hold None, numbers or lists.
+        if not isinstance(raw, str):
+            raise ValidationError(
+                f"{type(self).__name__} must be text, "
+                f"not {type(raw).__name__}."
+            )
         self._value: T = self.parse(raw)
 
     @property
@@ -53,9 +60,6 @@ class Field(ABC, Generic[T]):
     def __str__(self) -> str:
         return str(self._value)
 
-    def __repr__(self) -> str:
-        return f"{type(self).__name__}({str(self)!r})"
-
     def __eq__(self, other: object) -> bool:
         if not isinstance(other, Field):
             return NotImplemented
@@ -66,24 +70,27 @@ class Field(ABC, Generic[T]):
 
 
 class TextField(Field[str]):
-    """Free text: trimmed, inner whitespace collapsed, length-limited."""
+    """Free text: trimmed, inner whitespace collapsed, length-limited.
 
-    label = "Text"
-    max_length = 100
+    Subclasses set ``LABEL`` (used in messages) and ``MAX_LENGTH``.
+    """
+
+    LABEL: str
+    MAX_LENGTH: int
 
     def parse(self, raw: str) -> str:
         """Collapse whitespace; check emptiness, length and characters."""
-        text = " ".join(str(raw).split())
+        text = " ".join(raw.split())
         if not text:
-            raise ValidationError(f"{self.label} cannot be empty.")
-        if len(text) > self.max_length:
+            raise ValidationError(f"{self.LABEL} cannot be empty.")
+        if len(text) > self.MAX_LENGTH:
             raise ValidationError(
-                f"{self.label} is too long: {len(text)} characters "
-                f"(maximum {self.max_length})."
+                f"{self.LABEL} is too long: {len(text)} characters "
+                f"(maximum {self.MAX_LENGTH})."
             )
         if _CONTROL_CHARS.search(text):
             raise ValidationError(
-                f"{self.label} cannot contain control characters."
+                f"{self.LABEL} cannot contain control characters."
             )
         return text
 
@@ -91,39 +98,38 @@ class TextField(Field[str]):
 class Name(TextField):
     """Contact name; any characters that people really use are allowed."""
 
-    label = "Name"
-    max_length = 50
+    LABEL = "Name"
+    MAX_LENGTH = 50
 
 
 class Address(TextField):
     """Postal address as free text."""
 
-    label = "Address"
-    max_length = 120
+    LABEL = "Address"
+    MAX_LENGTH = 120
 
 
 class NoteText(TextField):
     """Text of a note."""
 
-    label = "Note text"
-    max_length = 1000
+    LABEL = "Note text"
+    MAX_LENGTH = 1000
 
 
 class Phone(Field[str]):
     """Ukrainian phone number, always stored as ``+380XXXXXXXXX``."""
 
-    FORMATS = "+380XXXXXXXXX, 380XXXXXXXXX or 0XXXXXXXXX"
     _SEPARATORS = re.compile(r"[\s\-.()]")
     _PATTERN = re.compile(r"(?:\+?380|0)([0-9]{9})")
 
     def parse(self, raw: str) -> str:
         """Drop separators and convert any accepted form to +380."""
-        compact = self._SEPARATORS.sub("", str(raw))
-        match = self._PATTERN.fullmatch(compact)
+        match = self._PATTERN.fullmatch(self._SEPARATORS.sub("", raw))
         if match is None:
             raise ValidationError(
-                f"Invalid phone number '{shorten(raw)}'. Use {self.FORMATS};"
-                " spaces, dashes, dots and brackets are allowed."
+                f"Invalid phone number '{shorten(raw)}'. Use +380XXXXXXXXX, "
+                "380XXXXXXXXX or 0XXXXXXXXX; spaces, dashes, dots and "
+                "brackets are allowed."
             )
         return "+380" + match.group(1)
 
@@ -137,19 +143,19 @@ class Email(Field[str]):
     """E-mail address; the domain part is stored in lower case."""
 
     MAX_LENGTH = 254
-    _LOCAL = (
+    _PATTERN = re.compile(
+        # The name: allowed characters in dot-separated parts.
         r"[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+"
         r"(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*"
-    )
-    _DOMAIN = (
+        r"@"
+        # The domain: labels of up to 63 characters, then a top level.
         r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
         r"[A-Za-z]{2,63}"
     )
-    _PATTERN = re.compile(_LOCAL + "@" + _DOMAIN)
 
     def parse(self, raw: str) -> str:
         """Check the ``name@domain.tld`` shape and the total length."""
-        email = str(raw).strip()
+        email = raw.strip()
         if len(email) > self.MAX_LENGTH or not self._PATTERN.fullmatch(email):
             raise ValidationError(
                 f"Invalid email '{shorten(email)}'. "
@@ -168,7 +174,7 @@ class Birthday(Field[date]):
 
     def parse(self, raw: str) -> date:
         """Parse a real calendar date between 1900 and today."""
-        text = str(raw).strip()
+        text = raw.strip()
         if not self._PATTERN.fullmatch(text):
             raise ValidationError(
                 f"Invalid birthday '{shorten(text)}'. "
@@ -201,7 +207,7 @@ class Tag(Field[str]):
 
     def parse(self, raw: str) -> str:
         """Drop a leading '#', lower the case and check the characters."""
-        tag = str(raw).strip().lstrip("#").casefold()
+        tag = raw.strip().lstrip("#").casefold()
         if not tag:
             raise ValidationError("Tag cannot be empty.")
         if len(tag) > self.MAX_LENGTH:
