@@ -8,7 +8,10 @@ dynamic = ["version"]
 description = "Command-line personal assistant: contacts with birthdays and notes with tags."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "prompt_toolkit>=3.0.36",
+    "rich>=13.0",
+]
 
 [project.optional-dependencies]
 dev = [
@@ -18,6 +21,9 @@ dev = [
     "pytest>=8.0",
     "ruff>=0.15",
 ]
+
+[project.scripts]
+personal-assistant = "personal_assistant.cli:main"
 
 [tool.setuptools.dynamic]
 version = { attr = "personal_assistant.__version__" }
