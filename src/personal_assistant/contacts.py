@@ -183,7 +183,7 @@ class AddressBook(UserDict[str, Contact]):
         return [c for c in self.sorted_contacts() if c.matches(query, field)]
 
     def upcoming_birthdays(
-        self, days: int, today: date | None = None
+        self, days: int, today: date
     ) -> list[tuple[Contact, date]]:
         """Return contacts whose birthday is within ``days`` days.
 
@@ -191,8 +191,6 @@ class AddressBook(UserDict[str, Contact]):
         ``days=7`` means today and the next seven days. The result is
         a list of (contact, birthday date) pairs sorted by date.
         """
-        if today is None:
-            today = date.today()
         upcoming: list[tuple[Contact, date]] = []
         for contact in self.data.values():
             birthday = contact.next_birthday(today)
